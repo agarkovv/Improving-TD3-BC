@@ -28,7 +28,7 @@ class TrainConfig:
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
     n_episodes: int = 10  # How many episodes run during evaluation
-    max_timesteps: int = int(1.25e6)  # Max time steps to run environment
+    max_offline_timesteps: int = int(1e6)  # Max time steps to run environment
     checkpoints_path: Optional[str] = None  # Save path
     load_model: str = ""  # Model load file name, "" doesn't load
     # TD3
@@ -46,7 +46,12 @@ class TrainConfig:
     normalize_reward: bool = False  # Normalize reward
     # TD3 + BC + PR
     lambd: float = 5.0  # Scale factor for new_alpha during policy refinement
-    pr_threshold: float = 0.75  # Part of time steps before policy refinement
+    max_offline_pr_timesteps: int = int(250e3)  # Part of time steps before policy refinement
+    # TD3 + BC + PR + OFT
+    init_steps: int = int(5e3)  # Time steps to init online replay buffer
+    max_online_timesteps: int = int(250e3)  # Max time steps to run online fine-tuning
+    alpha_start: float = 0.4  # Start alpha in decay
+    alpha_end: float = 0.2  # End alpha in decay
     # Wandb logging
     project: str = "CORL"
     group: str = "TD3_BC-D4RL"
@@ -151,10 +156,21 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self):
-        # Use this method to add new data into the replay buffer during fine-tuning.
-        # I left it unimplemented since now we do not do fine-tuning.
-        raise NotImplementedError
+    def add_transition(self, state, action, reward, next_state, is_done):
+        # (d) :  Use this method to add new data into the replay buffer during fine-tuning.
+        # (d) :  I left it unimplemented since now we do not do fine-tuning.
+        # (me):  Ok, Thanks!
+        if self._size == self._buffer_size:
+            raise ValueError(
+                "Replay buffer is smaller than the dataset you are trying to load!"
+            )
+        self._states[self._pointer] = state
+        self._actions[self._pointer] = action
+        self._rewards[self._pointer] = reward
+        self._next_states[self._pointer] = next_state
+        self._dones[self._pointer] = is_done
+        self._size += 1
+        self._pointer += 1
 
 
 def set_seed(
@@ -283,6 +299,9 @@ class TD3_BC:  # noqa
             policy_freq: int = 2,
             alpha: float = 2.5,
             lambd: float = 5.0,
+            alpha_start: float = 0.4,
+            alpha_end: float = 0.2,
+            max_online_timesteps: int = int(250e3),
             device: str = "cpu",
     ):
         self.actor = actor
@@ -302,7 +321,11 @@ class TD3_BC:  # noqa
         self.noise_clip = noise_clip
         self.policy_freq = policy_freq
         self.alpha = alpha
+
         self.lambd = lambd
+        self.max_online_timesteps = max_online_timesteps
+        self.alpha_start = alpha_start
+        self.alpha_end = alpha_end
 
         self.total_it = 0
         self.device = device
@@ -389,6 +412,30 @@ class TD3_BC:  # noqa
 
         return log_dict
 
+    def fill_buffer_online(self, online_replay_buffer: ReplayBuffer, env: gym.Env, init_steps: int):
+        state = env.reset()
+        for t in range(int(init_steps)):
+            state, action, reward, next_state, is_done = self.act_and_store(state, env, online_replay_buffer)
+            if is_done:
+                state = env.reset()
+            else:
+                state = next_state
+
+    def act_and_store(self, state: float, env: gym.Env, online_replay_buffer: ReplayBuffer):
+        action = self.actor_target(state)  # TODO: add noise to action
+        next_state, reward, is_done, _ = env.step(action)
+        online_replay_buffer.add_transition(state, action, reward, next_state, is_done)
+        return state, action, reward, next_state, is_done
+
+    def decay_alpha(self):
+        log_alphas = torch.log(torch.tensor(self.alpha_end / self.alpha_start, dtype=torch.float32))
+        self.alpha *= torch.exp(log_alphas / self.max_online_timesteps).item()
+
+    def train_online(self, batch: TensorBatch) -> Dict[str, float]:
+        log_dict = self.train(batch)
+        self.decay_alpha()
+        return log_dict
+
     def state_dict(self) -> Dict[str, Any]:
         return {
             "critic_1": self.critic_1.state_dict(),
@@ -414,6 +461,35 @@ class TD3_BC:  # noqa
         self.actor_target = copy.deepcopy(self.actor)
 
         self.total_it = state_dict["total_it"]
+
+
+def eval_episode(t, config, env, actor, evaluations, trainer):
+    if (t + 1) % config.eval_freq == 0:
+        print(f"Time steps: {t + 1}")
+        eval_scores = eval_actor(
+            env,
+            actor,
+            device=config.device,
+            n_episodes=config.n_episodes,
+            seed=config.seed,
+        )
+        eval_score = eval_scores.mean()
+        normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
+        evaluations.append(normalized_eval_score)
+        print("---------------------------------------")
+        print(
+            f"Evaluation over {config.n_episodes} episodes: "
+            f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
+        )
+        print("---------------------------------------")
+        if config.checkpoints_path is not None:
+            torch.save(
+                trainer.state_dict(),
+                os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
+            )
+        wandb.log(
+            {"d4rl_normalized_score": normalized_eval_score}, step=trainer.total_it
+        )
 
 
 @pyrallis.wrap()
@@ -487,10 +563,14 @@ def train(config: TrainConfig):
         "alpha": config.alpha,
         # TD3 + BC + PR
         'lambd': config.lambd,
+        # TD3 + BC + PR + OFT
+        'max_online_timesteps': config.max_online_timesteps,
+        'alpha_start': config.alpha_start,
+        'alpha_end': config.alpha_end,
     }
 
     print("---------------------------------------")
-    print(f"Training TD3 + BC, Env: {config.env}, Seed: {seed}")
+    print(f"Training TD3 + BC + PR + OFT, Env: {config.env}, Seed: {seed}")
     print("---------------------------------------")
 
     # Initialize actor
@@ -504,41 +584,48 @@ def train(config: TrainConfig):
     wandb_init(asdict(config))
 
     evaluations = []
-    for t in range(int(config.max_timesteps)):
+    # At first, we train agent offline
+    for t in range(int(config.max_offline_timesteps)):
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
-        if t < config.pr_threshold * config.max_timesteps:
-            log_dict = trainer.train(batch)
-        else:
-            log_dict = trainer.refine_policy(batch)
+        log_dict = trainer.train(batch)
         wandb.log(log_dict, step=trainer.total_it)
         # Evaluate episode
-        if (t + 1) % config.eval_freq == 0:
-            print(f"Time steps: {t + 1}")
-            eval_scores = eval_actor(
-                env,
-                actor,
-                device=config.device,
-                n_episodes=config.n_episodes,
-                seed=config.seed,
-            )
-            eval_score = eval_scores.mean()
-            normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
-            evaluations.append(normalized_eval_score)
-            print("---------------------------------------")
-            print(
-                f"Evaluation over {config.n_episodes} episodes: "
-                f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
-            )
-            print("---------------------------------------")
-            if config.checkpoints_path is not None:
-                torch.save(
-                    trainer.state_dict(),
-                    os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
-                )
-            wandb.log(
-                {"d4rl_normalized_score": normalized_eval_score}, step=trainer.total_it
-            )
+        eval_episode(t, config, env, actor, evaluations, trainer)
+
+    # Then we refine policy
+    for t in range(int(config.max_offline_pr_timesteps)):
+        batch = replay_buffer.sample(config.batch_size)
+        batch = [b.to(config.device) for b in batch]
+        log_dict = trainer.refine_policy(batch)
+        wandb.log(log_dict, step=trainer.total_it)
+        # Evaluate episode
+        eval_episode(t, config, env, actor, evaluations, trainer)
+
+    # Lastly, we conduct fine-tuning online with new replay buffer
+    online_replay_buffer = ReplayBuffer(
+        state_dim,
+        action_dim,
+        config.buffer_size,
+        config.device,
+    )
+    trainer.fill_buffer_online(online_replay_buffer, env, config.init_steps)
+
+    state = env.reset()
+    for t in range(int(config.max_online_timesteps)):
+        # Explore env
+        _, _, _, next_state, is_done = trainer.act_and_store(state, env, online_replay_buffer)
+        if is_done:
+            state = env.reset()
+        else:
+            state = next_state
+        # Train using own experience
+        batch = online_replay_buffer.sample(config.batch_size)
+        batch = [b.to(config.device) for b in batch]
+        log_dict = trainer.train_online(batch)
+        wandb.log(log_dict, step=trainer.total_it)
+        # Evaluate episode
+        eval_episode(t, config, env, actor, evaluations, trainer)
 
 
 if __name__ == "__main__":
