@@ -413,15 +413,15 @@ class TD3_BC:  # noqa
         return log_dict
 
     def fill_buffer_online(self, online_replay_buffer: ReplayBuffer, env: gym.Env, init_steps: int):
-        state = env.reset()
+        state = torch.tensor(env.reset(), dtype=torch.float32)
         for t in range(int(init_steps)):
             state, action, reward, next_state, is_done = self.act_and_store(state, env, online_replay_buffer)
             if is_done:
-                state = env.reset()
+                state = torch.tensor(env.reset(), dtype=torch.float32)
             else:
-                state = next_state
+                state = torch.tensor(next_state, dtype=torch.float32)
 
-    def act_and_store(self, state: float, env: gym.Env, online_replay_buffer: ReplayBuffer):
+    def act_and_store(self, state: torch.tensor, env: gym.Env, online_replay_buffer: ReplayBuffer):
         action = self.actor_target(state)  # TODO: add noise to action
         next_state, reward, is_done, _ = env.step(action)
         online_replay_buffer.add_transition(state, action, reward, next_state, is_done)
