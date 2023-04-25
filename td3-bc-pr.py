@@ -157,18 +157,18 @@ class ReplayBuffer:
         return [states, actions, rewards, next_states, dones]
 
     def add_transition(self, state, action, reward, next_state, is_done):
-        # (d) :  Use this method to add new data into the replay buffer during fine-tuning.
-        # (d) :  I left it unimplemented since now we do not do fine-tuning.
+        # (dev) :  Use this method to add new data into the replay buffer during fine-tuning.
+        # (dev) :  I left it unimplemented since now we do not do fine-tuning.
         # (me):  Ok, Thanks!
         if self._size == self._buffer_size:
             raise ValueError(
                 "Replay buffer is smaller than the dataset you are trying to load!"
             )
-        self._states[self._pointer] = state
-        self._actions[self._pointer] = action
-        self._rewards[self._pointer] = reward
-        self._next_states[self._pointer] = next_state
-        self._dones[self._pointer] = is_done
+        self._states[self._pointer] = self._to_tensor(state)
+        self._actions[self._pointer] = self._to_tensor(action)
+        self._rewards[self._pointer] = self._to_tensor(reward[..., None])
+        self._next_states[self._pointer] = self._to_tensor(next_state)
+        self._dones[self._pointer] = self._to_tensor(is_done[..., None])
         self._size += 1
         self._pointer += 1
 
@@ -413,15 +413,15 @@ class TD3_BC:  # noqa
         return log_dict
 
     def fill_buffer_online(self, online_replay_buffer: ReplayBuffer, env: gym.Env, init_steps: int):
-        state = env.reset()
+        state = torch.tensor(env.reset(), dtype=torch.float32)
         for t in range(int(init_steps)):
             state, action, reward, next_state, is_done = self.act_and_store(state, env, online_replay_buffer)
             if is_done:
-                state = env.reset()
+                state = torch.tensor(env.reset(), dtype=torch.float32)
             else:
-                state = next_state
+                state = torch.tensor(next_state, dtype=torch.float32)
 
-    def act_and_store(self, state: float, env: gym.Env, online_replay_buffer: ReplayBuffer):
+    def act_and_store(self, state: torch.tensor, env: gym.Env, online_replay_buffer: ReplayBuffer):
         action = self.actor_target(state)  # TODO: add noise to action
         next_state, reward, is_done, _ = env.step(action)
         online_replay_buffer.add_transition(state, action, reward, next_state, is_done)
