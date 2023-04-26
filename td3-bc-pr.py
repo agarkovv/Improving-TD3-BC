@@ -160,7 +160,7 @@ class ReplayBuffer:
                        is_done: float):
         # (dev) :  Use this method to add new data into the replay buffer during fine-tuning.
         # (dev) :  I left it unimplemented since now we do not do fine-tuning.
-        # (me):  Ok, Thanks!
+        # (me)  :  Ok, Thanks!
         if self._size == self._buffer_size:
             raise ValueError(
                 "Replay buffer is smaller than the dataset you are trying to load!"
@@ -414,17 +414,17 @@ class TD3_BC:  # noqa
         return log_dict
 
     def fill_buffer_online(self, online_replay_buffer: ReplayBuffer, env: gym.Env, init_steps: int):
-        state = torch.tensor(env.reset(), dtype=torch.float32)
+        state = env.reset()
         for t in range(int(init_steps)):
             state, action, reward, next_state, is_done = self.act_and_store(state, env, online_replay_buffer)
             if is_done:
-                state = torch.tensor(env.reset(), dtype=torch.float32)
+                state = env.reset()
             else:
-                state = torch.tensor(next_state, dtype=torch.float32)
+                state = next_state
 
-    def act_and_store(self, state: torch.tensor, env: gym.Env, online_replay_buffer: ReplayBuffer):
+    def act_and_store(self, state: np.ndarray, env: gym.Env, online_replay_buffer: ReplayBuffer):
         with torch.no_grad():
-            action = self.actor_target(state)
+            action = self.actor_target(torch.tensor(state, dtype=torch.float32), device=self.device)
             noise = (torch.randn_like(action) * self.policy_noise).clamp(
                 -self.noise_clip, self.noise_clip
             )
