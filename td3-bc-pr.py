@@ -424,7 +424,7 @@ class TD3_BC:  # noqa
 
     def act_and_store(self, state: np.ndarray, env: gym.Env, online_replay_buffer: ReplayBuffer):
         with torch.no_grad():
-            action = self.actor_target(torch.tensor(state, dtype=torch.float32), device=self.device)
+            action = self.actor_target(torch.tensor(state, dtype=torch.float32, device=self.device))
             noise = (torch.randn_like(action) * self.policy_noise).clamp(
                 -self.noise_clip, self.noise_clip
             )
