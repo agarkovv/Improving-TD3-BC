@@ -156,7 +156,8 @@ class ReplayBuffer:
         dones = self._dones[indices]
         return [states, actions, rewards, next_states, dones]
 
-    def add_transition(self, state, action, reward, next_state, is_done):
+    def add_transition(self, state: np.ndarray, action: np.ndarray, reward: float, next_state: np.ndarray,
+                       is_done: float):
         # (dev) :  Use this method to add new data into the replay buffer during fine-tuning.
         # (dev) :  I left it unimplemented since now we do not do fine-tuning.
         # (me):  Ok, Thanks!
@@ -166,9 +167,9 @@ class ReplayBuffer:
             )
         self._states[self._pointer] = self._to_tensor(state)
         self._actions[self._pointer] = self._to_tensor(action)
-        self._rewards[self._pointer] = self._to_tensor(reward[..., None])
+        self._rewards[self._pointer] = reward
         self._next_states[self._pointer] = self._to_tensor(next_state)
-        self._dones[self._pointer] = self._to_tensor(is_done[..., None])
+        self._dones[self._pointer] = is_done
         self._size += 1
         self._pointer += 1
 
@@ -422,7 +423,14 @@ class TD3_BC:  # noqa
                 state = torch.tensor(next_state, dtype=torch.float32)
 
     def act_and_store(self, state: torch.tensor, env: gym.Env, online_replay_buffer: ReplayBuffer):
-        action = self.actor_target(state)  # TODO: add noise to action
+        with torch.no_grad():
+            action = self.actor_target(state)
+            noise = (torch.randn_like(action) * self.policy_noise).clamp(
+                -self.noise_clip, self.noise_clip
+            )
+            action = (action + noise).clamp(
+                -self.max_action, self.max_action
+            )
         next_state, reward, is_done, _ = env.step(action)
         online_replay_buffer.add_transition(state, action, reward, next_state, is_done)
         return state, action, reward, next_state, is_done
