@@ -431,6 +431,7 @@ class TD3_BC:  # noqa
             action = (action + noise).clamp(
                 -self.max_action, self.max_action
             )
+            action = action.cpu()
         next_state, reward, is_done, _ = env.step(action)
         online_replay_buffer.add_transition(state, action, reward, next_state, is_done)
         return state, action, reward, next_state, is_done
