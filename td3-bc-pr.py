@@ -35,13 +35,12 @@ class TrainConfig:
     buffer_size: int = 2_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
     discount: float = 0.99  # Discount ffor
-    expl_noise: float = 0.1  # Std of Gaussian exploration noise
     tau: float = 0.005  # Target network update rate
     policy_noise: float = 0.2  # Noise added to target actor during critic update
     noise_clip: float = 0.5  # Range to clip target actor noise
     policy_freq: int = 2  # Frequency of delayed actor updates
     # TD3 + BC
-    alpha: float = 2.5  # Coefficient for Q function in actor loss
+    alpha: float = 0.4  # Coefficient for Q function in actor loss
     normalize: bool = True  # Normalize states
     normalize_reward: bool = False  # Normalize reward
     # TD3 + BC + PR
@@ -54,8 +53,8 @@ class TrainConfig:
     alpha_end: float = 0.2  # End alpha in decay
     # Wandb logging
     project: str = "CORL"
-    group: str = "TD3_BC-D4RL"
-    name: str = "TD3_BC"
+    group: str = "TD3_BC_PR_OFT-D4RL"
+    name: str = "TD3_BC_PR_OFT"
 
     def __post_init__(self):
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
@@ -298,7 +297,7 @@ class TD3_BC:  # noqa
             policy_noise: float = 0.2,
             noise_clip: float = 0.5,
             policy_freq: int = 2,
-            alpha: float = 2.5,
+            alpha: float = 0.4,
             lambd: float = 5.0,
             alpha_start: float = 0.4,
             alpha_end: float = 0.2,
