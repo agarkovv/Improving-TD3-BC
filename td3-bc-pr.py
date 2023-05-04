@@ -397,9 +397,8 @@ class TD3_BC:  # noqa
         pi = self.actor(state)
         q = self.critic_1(state, pi)
         alpha = self.alpha / self.lambd
-        lmbda = alpha / q.abs().mean().detach()
 
-        actor_loss = -lmbda * q.mean() + F.mse_loss(pi, action)
+        actor_loss = -q.mean() / q.abs().mean().detach() + alpha * F.mse_loss(pi, action)
         log_dict["actor_loss"] = actor_loss.item()
         # Optimize the actor
         self.actor_optimizer.zero_grad()
@@ -601,7 +600,7 @@ def train(config: TrainConfig):
         eval_episode(t, config, env, actor, evaluations, trainer)
 
     # Then we refine policy
-    for t in range(int(config.max_offline_pr_timesteps)):
+    for t in range(int(config.s)):
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         log_dict = trainer.refine_policy(batch)
