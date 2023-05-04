@@ -600,7 +600,7 @@ def train(config: TrainConfig):
         eval_episode(t, config, env, actor, evaluations, trainer)
 
     # Then we refine policy
-    for t in range(int(config.s)):
+    for t in range(int(config.max_offline_pr_timesteps)):
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         log_dict = trainer.refine_policy(batch)
