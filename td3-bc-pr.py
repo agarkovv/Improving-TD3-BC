@@ -372,9 +372,8 @@ class TD3_BC:  # noqa
             # Compute actor loss
             pi = self.actor(state)
             q = self.critic_1(state, pi)
-            lmbda = self.alpha / q.abs().mean().detach()
 
-            actor_loss = -lmbda * q.mean() + F.mse_loss(pi, action)
+            actor_loss = -q.mean() / q.abs().mean().detach() + self.alpha * F.mse_loss(pi, action)
             log_dict["actor_loss"] = actor_loss.item()
             # Optimize the actor
             self.actor_optimizer.zero_grad()
